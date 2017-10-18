@@ -109,6 +109,36 @@ func TestAccAWSLB_networkLoadbalancer(t *testing.T) {
 	})
 }
 
+func TestAccAWSLB_networkLoadbalancerEIP(t *testing.T) {
+	var conf elbv2.LoadBalancer
+	lbName := fmt.Sprintf("testaccawslb-basic-%s", acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum))
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:      func() { testAccPreCheck(t) },
+		IDRefreshName: "aws_lb.lb_test",
+		Providers:     testAccProviders,
+		CheckDestroy:  testAccCheckAWSLBDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSLBConfig_networkLoadBalancerEIP(lbName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckAWSLBExists("aws_lb.lb_test", &conf),
+					resource.TestCheckResourceAttr("aws_lb.lb_test", "name", lbName),
+					resource.TestCheckResourceAttr("aws_lb.lb_test", "internal", "true"),
+					resource.TestCheckResourceAttr("aws_lb.lb_test", "tags.%", "1"),
+					resource.TestCheckResourceAttr("aws_lb.lb_test", "tags.TestName", "TestAccAWSALB_basic"),
+					resource.TestCheckResourceAttr("aws_lb.lb_test", "enable_deletion_protection", "false"),
+					resource.TestCheckResourceAttr("aws_lb.lb_test", "ip_address_type", "ipv4"),
+					resource.TestCheckResourceAttrSet("aws_lb.lb_test", "zone_id"),
+					resource.TestCheckResourceAttrSet("aws_lb.lb_test", "dns_name"),
+					resource.TestCheckResourceAttrSet("aws_lb.lb_test", "arn"),
+					resource.TestCheckResourceAttr("aws_lb.lb_test", "load_balancer_type", "network"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccAWSLBBackwardsCompatibility(t *testing.T) {
 	var conf elbv2.LoadBalancer
 	lbName := fmt.Sprintf("testaccawslb-basic-%s", acctest.RandStringFromCharSet(10, acctest.CharSetAlphaNum))
@@ -828,6 +858,53 @@ resource "aws_subnet" "alb_test" {
 }
 
 `, lbName)
+}
+
+func testAccAWSLBConfig_networkLoadBalancerEIP(lbName string) string {
+	return fmt.Sprintf(`
+data "aws_availability_zones" "available" {}
+
+resource "aws_vpc" "main" {
+  cidr_block = "10.10.0.0/16"
+}
+
+resource "aws_subnet" "public" {
+  count = "${length(data.aws_availability_zones.available.names)}"
+  availability_zone = "${data.aws_availability_zones.available.names[count.index]}"
+  cidr_block = "10.10.${count.index}.0/24"
+  vpc_id = "${aws_vpc.main.id}"
+}
+
+resource "aws_internet_gateway" "default" {
+  vpc_id = "${aws_vpc.main.id}"
+}
+
+resource "aws_route_table" "public" {
+  vpc_id = "${aws_vpc.main.id}"
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = "${aws_internet_gateway.default.id}"
+  }
+}
+
+resource "aws_route_table_association" "a" {
+  count = "${length(data.aws_availability_zones.available.names)}"
+  subnet_id      = "${aws_subnet.public.*.id[count.index]}"
+  route_table_id = "${aws_route_table.public.id}"
+}
+
+resource "aws_lb" "test" {
+  name            = "%s"
+  load_balancer_type = "network"
+  subnet_mapping {
+    subnet_id = "${aws_subnet.public.0.id}"
+    allocation_id = "${aws_eip.lb.0.id}"
+  }
+  subnet_mapping {
+    subnet_id = "${aws_subnet.public.1.id}"
+    allocation_id = "${aws_eip.lb.1.id}"
+  }
+}`, lbName)
 }
 
 func testAccAWSLBConfigBackwardsCompatibility(lbName string) string {
